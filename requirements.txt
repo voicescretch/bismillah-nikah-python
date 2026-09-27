@@ -1,5 +1,6 @@
 python-telegram-bot>=20.8
-SQLAlchemy>=2.0.25
+SQLAlchemy[asyncio]>=2.0.25
+greenlet>=3.0.0
 asyncpg>=0.29.0
 pandas>=2.2.0
 openpyxl>=3.1.2
