@@ -1,12 +1,20 @@
-from datetime import datetime
-from typing import AsyncGenerator
+import logging
+import ssl
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator, Optional
 
 from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String, func
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import declarative_base, relationship
 
 from bot.config import DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -51,28 +59,54 @@ class Transaction(Base):
     group = relationship("SavingsGroup", back_populates="transactions")
 
 
-# Buat async engine dengan connection pool yang cocok untuk serverless
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    pool_pre_ping=True,
-    pool_recycle=300,
-    pool_size=5,
-    max_overflow=10,
-)
+# Engine & Session Maker singleton
+_engine: Optional[AsyncEngine] = None
+_session_factory: Optional[async_sessionmaker] = None
 
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autoflush=False,
-)
+
+def get_engine() -> AsyncEngine:
+    global _engine
+    if _engine is not None:
+        return _engine
+
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL belum diatur di Environment Variables!")
+
+    connect_args = {}
+    # Jika koneksi ke cloud (Neon, Supabase, dll) yang membutuhkan SSL
+    if "localhost" not in DATABASE_URL and "127.0.0.1" not in DATABASE_URL:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        connect_args["ssl"] = ssl_ctx
+
+    _engine = create_async_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args=connect_args,
+    )
+    return _engine
+
+
+def get_session_factory() -> async_sessionmaker:
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(
+            bind=get_engine(),
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+    return _session_factory
 
 
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Context manager untuk async session SQLAlchemy."""
-    async with AsyncSessionLocal() as session:
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         try:
             yield session
             await session.commit()
@@ -83,5 +117,9 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db():
     """Inisialisasi tabel database."""
+    if not DATABASE_URL:
+        logger.warning("DATABASE_URL kosong, lewati inisialisasi tabel database.")
+        return
+    engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

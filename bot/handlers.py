@@ -111,7 +111,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         status_grup = "Belum Terhubung dengan Pasangan ❌"
-        partner_info = ""
 
         if user.group_id:
             stmt = select(SavingsGroup).options(selectinload(SavingsGroup.members)).where(SavingsGroup.id == user.group_id)
@@ -910,18 +909,16 @@ async def riwayat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("ℹ️ Belum ada transaksi yang tercatat dalam kelompok ini.")
             return
 
-        filter_type = "seluruh"
         target_user_id = None
         target_label = "Seluruh Grup"
 
         if args:
             filter_arg = args[0].strip().lower()
             if filter_arg == "pribadi":
-                filter_type = "pribadi"
                 target_user_id = user.telegram_id
                 target_label = f"Pribadi - {user.full_name}"
             else:
-                # Filter by username or telegram id
+                # Filter by username
                 raw_uname = filter_arg.lstrip("@")
                 stmt_u = select(User).where(func.lower(User.username) == raw_uname)
                 res_u = await session.execute(stmt_u)
@@ -972,12 +969,13 @@ async def riwayat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Global error handler untuk logging."""
-    logger.error("Exception saat memproses update:", exc_info=context.error)
+    logger.error("Exception saat memproses update: %s", context.error, exc_info=context.error)
 
 
-def setup_application() -> Application:
+def setup_application(token: Optional[str] = None) -> Application:
     """Membangun dan mendaftarkan seluruh handler ke Application python-telegram-bot."""
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    bot_token = token or TELEGRAM_BOT_TOKEN or "123456789:DummyTokenForInitialization"
+    app = Application.builder().token(bot_token).build()
 
     # Daftarkan Command Handlers
     app.add_handler(CommandHandler("start", start_command))
