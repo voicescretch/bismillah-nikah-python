@@ -1,14 +1,30 @@
 import json
 import logging
+import os
+import sys
+from pathlib import Path
 from typing import Optional
+
+# Tambahkan root folder proyek ke sys.path agar seluruh modul 'bot' selalu terdeteksi di Vercel
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from telegram import Update
 from telegram.ext import Application
 
-from bot.config import DATABASE_URL, TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET
-from bot.database import init_db
-from bot.handlers import setup_application
+try:
+    from bot.config import DATABASE_URL, TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET
+    from bot.database import init_db
+    from bot.handlers import setup_application
+except Exception as e:
+    logging.error("Gagal mengimpor modul bot: %s", e, exc_info=True)
+    DATABASE_URL = os.getenv("DATABASE_URL", "")
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+    init_db = None
+    setup_application = None
 
 # Konfigurasi Logging
 logging.basicConfig(
@@ -36,6 +52,9 @@ async def get_telegram_app() -> Application:
             logger.error("TELEGRAM_BOT_TOKEN belum diatur!")
             raise ValueError("TELEGRAM_BOT_TOKEN is missing in environment variables.")
 
+        if setup_application is None:
+            raise RuntimeError("Modul bot.handlers gagal diimpor!")
+
         _telegram_app = setup_application(TELEGRAM_BOT_TOKEN)
         await _telegram_app.initialize()
         logger.info("Telegram bot Application initialized.")
@@ -45,16 +64,23 @@ async def get_telegram_app() -> Application:
     return _telegram_app
 
 
-async def ensure_db_ready():
+async def ensure_db_ready() -> str:
     """Memastikan tabel database siap saat request pertama."""
     global _db_initialized
     if not _db_initialized:
+        if not DATABASE_URL:
+            return "DATABASE_URL is empty"
+        if init_db is None:
+            return "bot.database module not loaded"
         try:
             await init_db()
             _db_initialized = True
             logger.info("Database schema initialized successfully.")
+            return "connected & initialized"
         except Exception as e:
             logger.error("Error initializing database schema: %s", e, exc_info=True)
+            return f"error: {str(e)}"
+    return "connected"
 
 
 @app.get("/")
@@ -67,14 +93,13 @@ async def health_check():
     has_secret = bool(WEBHOOK_SECRET)
 
     db_status = "untested"
-    try:
-        if has_db:
-            await ensure_db_ready()
-            db_status = "connected"
-        else:
-            db_status = "missing DATABASE_URL"
-    except Exception as e:
-        db_status = f"error: {str(e)}"
+    if has_db:
+        try:
+            db_status = await ensure_db_ready()
+        except Exception as e:
+            db_status = f"connection failed: {str(e)}"
+    else:
+        db_status = "DATABASE_URL belum diatur di Vercel"
 
     return {
         "status": "online",
