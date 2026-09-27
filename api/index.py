@@ -57,9 +57,13 @@ async def get_telegram_app() -> Application:
 
         _telegram_app = setup_application(TELEGRAM_BOT_TOKEN)
         await _telegram_app.initialize()
-        logger.info("Telegram bot Application initialized.")
-    elif not _telegram_app.running and not getattr(_telegram_app, "_initialized", True):
-        await _telegram_app.initialize()
+        await _telegram_app.start()
+        logger.info("Telegram bot Application initialized and started.")
+    else:
+        if not getattr(_telegram_app, "_initialized", True):
+            await _telegram_app.initialize()
+        if not _telegram_app.running:
+            await _telegram_app.start()
 
     return _telegram_app
 
@@ -87,7 +91,7 @@ async def ensure_db_ready() -> str:
 @app.get("/api")
 @app.get("/api/index")
 async def health_check():
-    """Endpoint diagnosa status bot & environment variables."""
+    """Endpoint diagnosa status bot, database & webhook status dari Telegram."""
     has_token = bool(TELEGRAM_BOT_TOKEN)
     has_db = bool(DATABASE_URL)
     has_secret = bool(WEBHOOK_SECRET)
@@ -101,6 +105,25 @@ async def health_check():
     else:
         db_status = "DATABASE_URL belum diatur di Vercel"
 
+    # Periksa status webhook live langsung dari Telegram API
+    webhook_info_report = {}
+    if has_token:
+        try:
+            telegram_app = await get_telegram_app()
+            wh_info = await telegram_app.bot.get_webhook_info()
+            webhook_info_report = {
+                "registered_webhook_url": wh_info.url or "(Belum diatur / Kosong ❌)",
+                "has_custom_certificate": wh_info.has_custom_certificate,
+                "pending_update_count": wh_info.pending_update_count,
+                "last_error_date": str(wh_info.last_error_date) if wh_info.last_error_date else None,
+                "last_error_message": wh_info.last_error_message or "None (No errors reported by Telegram)",
+                "status": "Webhook Terdaftar ✅" if wh_info.url else "Webhook Belum Didaftarkan ❌",
+            }
+        except Exception as e:
+            webhook_info_report = {"error": f"Gagal mengambil info webhook: {str(e)}"}
+    else:
+        webhook_info_report = {"error": "TELEGRAM_BOT_TOKEN belum diset"}
+
     return {
         "status": "online",
         "service": "Bismillah Nikah Telegram Bot API",
@@ -110,6 +133,7 @@ async def health_check():
             "WEBHOOK_SECRET": "SET ✅" if has_secret else "NOT SET (Optional)",
             "database_connection": db_status,
         },
+        "telegram_webhook_status": webhook_info_report,
     }
 
 
